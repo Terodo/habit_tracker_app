@@ -49,6 +49,34 @@ Repo zu GitHub pushen, in Netlify *Add new site → Import an existing project* 
 Build-Befehl und Publish-Ordner stehen bereits in [`netlify.toml`](netlify.toml) —
 nichts weiter einzustellen.
 
+### Variante 3 — GitHub Actions, manuell ausgelöst
+
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) baut und deployt auf Knopfdruck.
+Kein Deploy bei jedem Push — der Workflow läuft ausschließlich über `workflow_dispatch`.
+
+**Einmalige Einrichtung — zwei Secrets:**
+
+| Secret                | Woher                                                                      |
+| --------------------- | -------------------------------------------------------------------------- |
+| `NETLIFY_AUTH_TOKEN`  | Netlify → *User settings* → *Applications* → *Personal access tokens* → *New access token* |
+| `NETLIFY_SITE_ID`     | Netlify → Site öffnen → *Site configuration* → *Site details* → *Site ID*   |
+
+Beide eintragen unter *Repo → Settings → Secrets and variables → Actions → New repository secret*.
+Fehlt eins, bricht der Workflow gleich im ersten Schritt mit klarer Meldung ab, statt erst
+nach dem Build.
+
+**Auslösen:** *Actions* → *Deploy zu Netlify* → *Run workflow*. Zwei Eingaben:
+
+- **target** — `preview` erzeugt eine eigene Test-URL und lässt die Live-Adresse unberührt,
+  `production` schaltet den Stand live.
+- **message** — freie Notiz, taucht in der Netlify-Deploy-Historie auf.
+
+Die fertige URL steht danach in der Job-Summary des Laufs.
+
+Ablauf: Checkout → Secrets prüfen → Node 22 mit npm-Cache → `npm ci` → `npm run icons` →
+`npm run build` → `netlify deploy`. Die Regeln aus `netlify.toml` (SPA-Fallback, Cache-Header)
+greifen dabei ebenfalls, weil die CLI die Datei aus dem Repo-Wurzelverzeichnis liest.
+
 ## Installation auf dem Gerät
 
 ### iPhone (iOS)
@@ -115,7 +143,7 @@ Dazu je Tag: Stimmung (1–5) und Freitext-Notiz.
 
 ## Aufbau
 
-```
+```text
 src/
   types.ts            Datenmodell (Habit, DayEntry, AppData)
   date.ts             ISO-Datums-Helfer, deutsche Formate, Montag-first Raster

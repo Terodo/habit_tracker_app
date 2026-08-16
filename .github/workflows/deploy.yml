@@ -1,0 +1,108 @@
+name: Deploy zu Netlify
+
+# Nur manuell — kein Deploy bei jedem Push.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deploy-Ziel'
+        type: choice
+        required: true
+        default: preview
+        options:
+          - preview
+          - production
+      message:
+        description: 'Notiz für die Deploy-Historie (optional)'
+        type: string
+        required: false
+
+# Zwei gleichzeitige Deploys auf dieselbe Site vermeiden.
+concurrency:
+  group: netlify-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Secrets prüfen
+        env:
+          AUTH: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          SITE: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          missing=0
+          if [ -z "$AUTH" ]; then echo "::error::Secret NETLIFY_AUTH_TOKEN fehlt"; missing=1; fi
+          if [ -z "$SITE" ]; then echo "::error::Secret NETLIFY_SITE_ID fehlt"; missing=1; fi
+          if [ "$missing" = "1" ]; then
+            echo "Anlegen unter: Repo -> Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+
+      - name: Node einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Icons erzeugen
+        run: npm run icons
+
+      - name: Bauen
+        run: npm run build
+
+      - name: Nach Netlify deployen
+        id: netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NOTE: ${{ inputs.message || format('manueller Deploy von {0}', github.actor) }}
+        run: |
+          set -o pipefail
+          if [ "${{ inputs.target }}" = "production" ]; then
+            npx --yes netlify-cli@27 deploy --dir=dist --message "$NOTE" --prod --json | tee deploy.json
+            # bei --prod ist `url` die Live-Adresse, `deploy_url` nur der Einzel-Snapshot
+            KEY=url
+          else
+            npx --yes netlify-cli@27 deploy --dir=dist --message "$NOTE" --json | tee deploy.json
+            KEY=deploy_url
+          fi
+
+          # Robust gegen Fortschrittszeilen, die die CLI vor das JSON schreiben koennte.
+          # Schlaegt das Auslesen fehl, ist der Deploy trotzdem durch - nur die URL fehlt dann.
+          URL=$(KEY="$KEY" node -e "
+            const raw = require('fs').readFileSync('deploy.json', 'utf8');
+            const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+            const d = a < 0 || b < a ? {} : JSON.parse(raw.slice(a, b + 1));
+            console.log(d[process.env.KEY] || d.deploy_url || d.url || '');
+          " || true)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Ergebnis zusammenfassen
+        run: |
+          {
+            echo "### Deploy abgeschlossen"
+            echo ""
+            echo "| Feld | Wert |"
+            echo "| --- | --- |"
+            echo "| Ziel | \`${{ inputs.target }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| URL | ${{ steps.netlify.outputs.url }} |"
+            echo ""
+            if [ "${{ inputs.target }}" = "preview" ]; then
+              echo "Preview-Deploy — die Live-Adresse der Site bleibt unverändert."
+            else
+              echo "Produktiv-Deploy — die Live-Adresse zeigt jetzt auf diesen Stand."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
